@@ -1,0 +1,834 @@
+---
+title: "8.Study.Rmd"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#0. Set the path
+```{r cars}
+setwd("/media/sequentia/visitors/visitor1/Analisis_abundance/8.Study/")
+study <- strsplit(getwd(), "/")[[1]][length(strsplit(getwd(), "/")[[1]])] #this is only to print the name of the study in the plots
+```
+#libraries
+```{r}
+library("DAtest")
+#library("DESeq2")
+library("limma")
+library("edgeR")
+library("metagenomeSeq")
+library("baySeq")
+library("ALDEx2")
+library("impute")
+library("samr")
+library("pscl")
+library("statmod")
+library("mvabund")
+#library("phyloseq")
+library("eulerr")
+library("ggplot2")
+library("ggpubr")
+library("ape")
+library("gridExtra")
+library("grid")
+library("gtable")
+library("cgwtools")
+```
+
+#1. Load Metadata
+```{r}
+coldata <- read.csv("8.Study_metadata.txt", header = TRUE)
+rownames(coldata) <- coldata[,1]
+coldata[,1] <- NULL
+
+#now we create a new column that is the "host_disease" (autism or healthy)
+host_disease <- c()
+
+for (cond in coldata$Description){
+  if (cond == "Healthy_control"){
+    host_disease <- c(host_disease, "1 Healthy")
+  }
+  else {
+    host_disease <- c(host_disease, "2 Autism")
+  }
+}
+coldata <- cbind(coldata, host_disease)
+```
+
+#2. Load Counts
+```{r}
+#Table with absolute counts
+cts <- read.csv("8.Study_absolute.csv")
+rownames(cts) <- cts[,1]
+cts[,1] <- NULL
+
+
+lista_cts_colnames <- c()
+for (i in colnames(cts)){
+tmp <- strsplit(i, "_")[[1]][1]
+lista_cts_colnames <- c(lista_cts_colnames, tmp)
+}
+colnames(cts) <- lista_cts_colnames
+
+
+#Table with percentages
+pts <- read.csv("8.Study_relative.csv")
+rownames(pts) <- pts[,1]
+pts[,1] <- NULL
+lista_pts_colnames <- c()
+for (i in colnames(pts)){
+tmp <- strsplit(i, "_")[[1]][1]
+lista_pts_colnames <- c(lista_pts_colnames, tmp)
+}
+colnames(pts) <- lista_pts_colnames
+```
+#Filter if an OTU have less than 10 reads of mean
+```{r}
+filter <- c()
+for (OTU in rownames(cts)){
+  if (mean(as.numeric(cts[OTU,]))<10){
+    filter <- c(filter, which(rownames(cts)==OTU))
+  }
+}
+ cts <- cts[-filter,]
+ pts <- pts[rownames(cts),]
+```
+
+#check
+```{r}
+identical(rownames(coldata), colnames(cts))
+```
+#poner el mismo orden en coldata
+```{r}
+coldata <- coldata[colnames(cts),]
+```
+#check
+```{r}
+identical(rownames(coldata), colnames(cts))
+```
+
+#3. Merge metadata and counts
+```{r}
+cts_global <- rbind(cts, t(coldata)) #table (absolute counts + metadata)
+pts_global <- rbind(pts, t(coldata)) # table (relative counts + metadata)
+```
+
+#PCA: seeing the data in order to use DAtet (create a phyloseq object)
+```{r}
+#1. Create a OTU table from a downloaded file
+cond = as.factor(coldata$host_disease)
+otumat <- as.matrix(cts)
+
+#2. Create a taxonomy table
+
+taxmat <- c("Domain","Phylum", "Class", "Order", "Family", "Genus", "Species")
+
+for (i in 1:length(rownames(otumat))){
+  a <- strsplit(rownames(otumat)[i], ";")[[1]]
+  
+  #if a taxon is empty fill it with NA
+  while (length(a) != 7){
+    a <- c(a, NA)
+  }
+  taxmat <- rbind(taxmat, a)
+}
+
+
+colnames(taxmat) <- taxmat[1,]
+rownames(taxmat) <- c(1,rownames(otumat))
+taxmat <- taxmat[-c(1),]
+
+#3. Merge
+
+#combine them into a phyloseq object
+OTU = otu_table(otumat, taxa_are_rows = TRUE)
+TAX = tax_table(taxmat)
+
+#4. Create Phyloseq object
+
+#create the physeq object
+physeq = phyloseq(OTU, TAX)
+
+#5. Phylogenetic tree
+
+random_tree = rtree(ntaxa(physeq), rooted=TRUE, tip.label=taxa_names(physeq))
+
+#6. Covariables
+
+#covariables (conditions)
+sampledata = sample_data(data.frame(
+  condition = cond, row.names = sample_names(physeq), stringsAsFactors=FALSE))
+#merging
+physeq1 = merge_phyloseq(physeq, sampledata, random_tree)
+
+#checking
+physeq2 = phyloseq(OTU, TAX, sampledata, random_tree)
+
+identical(physeq1, physeq2)
+```
+
+#PCA
+
+```{r}
+sample_data(physeq1)$cond <- factor(cond)
+
+
+GP.ord <- ordinate(physeq1, "NMDS", "bray")
+p1 = plot_ordination(physeq1, GP.ord, type="taxa", color="Phylum", title="taxa")
+print(p1)
+
+
+#samples
+p2 = plot_ordination(physeq1, GP.ord, type="samples", color = "cond") 
+print(p2)
+
+```
+#Choose the best method to select the OTUs that are significally different using DAtest
+```{r}
+#predictor of interest
+vec <-  as.character(coldata$host_disease)
+```
+
+```{r}
+#comparing methods (you have put y
+#test <- testDA(cts, predictor = vec)
+load("/media/sequentia/visitors/visitor1/Analisis_abundance/Tests.Rdata")
+test <- test_8.Study
+summary(test)
+```
+#power
+```{r}
+# po.ttt <- powerDA(cts, predictor = vec, test = "")
+# plot(po.ttt)
+# summary(po.ttt)
+```
+
+
+#hacer el test con todos los metodos y ver en diagrama de venn las coincidencias de los primeros
+```{r}
+#testa <- load("/media/sequentia/visitors/visitor1/Analisis_abundance/Testa.Rdata")
+```
+
+
+#testeo de un method en concreto
+```{r}
+#testeo de un metodo
+final <- DA.vli(cts, predictor = vec)
+```
+#subset de los datos significativos
+```{r}
+if ("log2FC" %in% colnames(final)){
+  colnames(final)[which(colnames(final)=="log2FC") <- "logFC"]
+}
+OTU_dif <- final[which(final$pval.adj<0.05 & abs(final$logFC)>0.5),]
+
+```
+#vector con OTUs que no llegan a familia
+```{r}
+OTU_dif <- OTU_dif[which(!grepl("d);unkn", rownames(OTU_dif))),] # rm dominium
+OTU_dif <- OTU_dif[which(!grepl("p);unkn", rownames(OTU_dif))),]#rm phylum
+OTU_dif <- OTU_dif[which(!grepl("c);unkn", rownames(OTU_dif))),] #rm class 
+OTU_dif <- OTU_dif[which(!grepl("o);unkn", rownames(OTU_dif))),] #rm orden
+#conditions
+condition <- vec
+OTU_vli <- OTU_dif
+```
+
+#CREATE INDEX_TABLE
+```{r}
+indexes <- c()
+for (i in colnames(pts)){
+
+#First, we create a SRR table where we have w_table and relative_counts per sample
+counts_OTU <- pts[c(rownames(OTU_dif)), i]
+tmp <- OTU_dif
+SRR_table <- cbind(tmp, counts_OTU) #SRR_table contains OTU_dif and the counts per sample
+
+#Here we calculate all the ADIs for each sample
+index <- sum(SRR_table[which(SRR_table$logFC>0),]$counts_OTU)/length(SRR_table[which(SRR_table$logFC>0),]$counts_OTU) - sum(SRR_table[which(SRR_table$logFC<0),]$counts_OTU)/length(SRR_table[which(SRR_table$logFC<0),]$counts_OTU)
+
+indexes <- as.numeric(as.character(c(indexes, index)))
+}
+
+#We create a table with the index and condition per sample
+index_table_counts <- as.data.frame(cbind(indexes, condition))
+rownames(index_table_counts) <- colnames(pts)
+index_table_counts[, "indexes"] <- as.numeric(as.character(index_table_counts[, "indexes"]))
+index_table_counts$indexes <- index_table_counts$indexes*100
+```
+#11.3 PLOT WILCOXON ANALYSIS FOR INDEXES
+```{r}
+tmp <- index_table_counts
+ggboxplot(tmp, x = "condition", y = "indexes",
+                 color = "condition", palette = c("red", "blue"),
+                 add = "jitter", ylab = "ADI") +
+  ggtitle(label = "Comparación de index entre Autistas y Healthy.\nMethod: LIMMA voom (vli)", subtitle = study) +
+      theme(plot.title = element_text(size = 15, face = "bold")) +
+          font("title", size = 12) +
+          stat_compare_means(method = "wilcox.test", label.x = 1.5, aes(label = ..p.signif..))
+
+```
+#Z-SCORE Index
+```{r}
+#we create a table per condition and we fill it with z_scores
+
+index_healthy <- index_table_counts[which(index_table_counts$condition=="1 Healthy"), "indexes"]
+zscore_healthy_index <- as.numeric(scale(index_healthy))
+names_index_healthy <- rownames(index_table_counts[which(index_table_counts$condition=="1 Healthy"),])
+names(zscore_healthy_index) <- names_index_healthy
+
+index_autism <- index_table_counts[which(index_table_counts$condition== "2 Autism"), "indexes"]
+zscore_autism_index <- c()
+for (ind in index_autism){
+  tmp <- c(index_healthy, ind)
+  zscore_autism_index <- c(zscore_autism_index, scale(tmp)[length(tmp)])
+}
+names_index_autism <- rownames(index_table_counts[which(index_table_counts$condition=="2 Autism"),])
+names(zscore_autism_index) <- names_index_autism
+
+#mismo orden de samples en zscore_index y en index_table
+zscore_index <- c(zscore_healthy_index, zscore_autism_index)
+zscore_index <- zscore_index[rownames(index_table_counts)]
+index_table_counts <- cbind(index_table_counts, zscore_index)
+```
+
+#DISTRIBUTION
+```{r}
+vert_line_df <- data.frame(variable = seq(-4,4, 0.5))
+perc <- sort(index_table_counts[which(index_table_counts$condition=="2 Autism"), "zscore_index"])
+
+percentiles <- c()
+for (div in seq(-4,4, 0.5)){
+  percentiles <- c(percentiles, round(length(which(perc<div))/length(perc)*100, 2))
+}
+label1 <- paste0("P[",percentiles,"]")
+
+ggplot(index_table_counts, aes(x=zscore_index, colour=condition)) +
+  geom_density() +
+  scale_y_continuous(limits = c(0, 1.3))+
+  scale_x_continuous(breaks=seq(-4, 4, 0.5)) +
+  theme(legend.position="top")+
+annotate("text", x = seq(-4,4, 0.5), y = 1.15, label = label1, parse = TRUE, size=4, angle = 90)+
+
+  
+  ggtitle("Distribution of z-score of ADI (Autism Dysbiosis Index)\nMethod: LIMMA voom (vli)") +
+  geom_vline(data = vert_line_df,aes(xintercept = variable), linetype="dashed", size=0.3, colour = "turquoise3")
+```
+
+
+##############OTRO METODO##############
+
+#testeo de un method en concreto
+```{r}
+#testeo de un metodo
+final <- DA.ttc(cts, predictor = vec)
+```
+#subset de los datos significativos
+```{r}
+if ("log2FC" %in% colnames(final)){
+  colnames(final)[which(colnames(final)=="log2FC")] <- "logFC"
+}
+
+colnames(final)[which(colnames(final)=="diff.btw")] <- "logFC"
+colnames(final)[which(colnames(final)=="we.eBH")] <- "pval.adj"
+
+OTU_dif <- final[which(final$pval.adj<0.05 & abs(final$logFC)>0.5),]
+
+```
+#vector con OTUs que no llegan a familia
+```{r}
+OTU_dif <- OTU_dif[which(!grepl("d);unkn", rownames(OTU_dif))),] # rm dominium
+OTU_dif <- OTU_dif[which(!grepl("p);unkn", rownames(OTU_dif))),]#rm phylum
+OTU_dif <- OTU_dif[which(!grepl("c);unkn", rownames(OTU_dif))),] #rm class 
+OTU_dif <- OTU_dif[which(!grepl("o);unkn", rownames(OTU_dif))),] #rm orden
+#conditions
+condition <- vec
+OTU_ttc <- OTU_dif
+```
+#CREATE INDEX_TABLE
+```{r}
+indexes <- c()
+for (i in colnames(pts)){
+
+#First, we create a SRR table where we have w_table and relative_counts per sample
+counts_OTU <- pts[c(rownames(OTU_dif)), i]
+tmp <- OTU_dif
+SRR_table <- cbind(tmp, counts_OTU) #SRR_table contains OTU_dif and the counts per sample
+
+#Here we calculate all the ADIs for each sample
+index <- sum(SRR_table[which(SRR_table$logFC>0),]$counts_OTU)/length(SRR_table[which(SRR_table$logFC>0),]$counts_OTU) - sum(SRR_table[which(SRR_table$logFC<0),]$counts_OTU)/length(SRR_table[which(SRR_table$logFC<0),]$counts_OTU)
+
+indexes <- as.numeric(as.character(c(indexes, index)))
+}
+
+#We create a table with the index and condition per sample
+index_table_counts <- as.data.frame(cbind(indexes, condition))
+rownames(index_table_counts) <- colnames(pts)
+index_table_counts[, "indexes"] <- as.numeric(as.character(index_table_counts[, "indexes"]))
+index_table_counts$indexes <- index_table_counts$indexes*100
+```
+#11.3 PLOT WILCOXON ANALYSIS FOR INDEXES
+```{r}
+tmp <- index_table_counts
+ggboxplot(tmp, x = "condition", y = "indexes",
+                 color = "condition", palette = c("red", "blue"),
+                 add = "jitter", ylab = "ADI") +
+  ggtitle(label = "Comparación de index entre Autistas y Healthy.\nMethod: t-test - CLR (ttc)", subtitle = study) +
+      theme(plot.title = element_text(size = 15, face = "bold")) +
+          font("title", size = 12) +
+          stat_compare_means(method = "wilcox.test", label.x = 1.5, aes(label = ..p.signif..))
+
+```
+#Z-SCORE Index
+```{r}
+#we create a table per condition and we fill it with z_scores
+
+index_healthy <- index_table_counts[which(index_table_counts$condition=="1 Healthy"), "indexes"]
+zscore_healthy_index <- as.numeric(scale(index_healthy))
+names_index_healthy <- rownames(index_table_counts[which(index_table_counts$condition=="1 Healthy"),])
+names(zscore_healthy_index) <- names_index_healthy
+
+index_autism <- index_table_counts[which(index_table_counts$condition== "2 Autism"), "indexes"]
+zscore_autism_index <- c()
+for (ind in index_autism){
+  tmp <- c(index_healthy, ind)
+  zscore_autism_index <- c(zscore_autism_index, scale(tmp)[length(tmp)])
+}
+names_index_autism <- rownames(index_table_counts[which(index_table_counts$condition=="2 Autism"),])
+names(zscore_autism_index) <- names_index_autism
+
+#mismo orden de samples en zscore_index y en index_table
+zscore_index <- c(zscore_healthy_index, zscore_autism_index)
+zscore_index <- zscore_index[rownames(index_table_counts)]
+index_table_counts <- cbind(index_table_counts, zscore_index)
+```
+
+#DISTRIBUTION
+```{r}
+vert_line_df <- data.frame(variable = seq(-4,4, 0.5))
+perc <- sort(index_table_counts[which(index_table_counts$condition=="2 Autism"), "zscore_index"])
+
+percentiles <- c()
+for (div in seq(-4,4, 0.5)){
+  percentiles <- c(percentiles, round(length(which(perc<div))/length(perc)*100, 2))
+}
+label1 <- paste0("P[",percentiles,"]")
+
+ggplot(index_table_counts, aes(x=zscore_index, colour=condition)) +
+  geom_density() +
+  scale_y_continuous(limits = c(0,1.5))+
+  scale_x_continuous(breaks=seq(-4, 4, 0.5)) +
+annotate("text", x = seq(-4,4, 0.5), y = 1.4, label = label1, parse = TRUE, size=4, angle = 90)+
+
+  
+  ggtitle("Distribution of z-score of ADI (Autism Dysbiosis Index)\nMethod: t-test - CLR (ttc)") +
+  geom_vline(data = vert_line_df,aes(xintercept = variable), linetype="dashed", size=0.3, colour = "turquoise3")
+```
+
+##############OTRO METODO##############
+
+#testeo de un method en concreto
+```{r}
+#testeo de un metodo
+final <- DA.lic(cts, predictor = vec)
+```
+#subset de los datos significativos
+```{r}
+if ("log2FC" %in% colnames(final)){
+  colnames(final)[which(colnames(final)=="log2FC")] <- "logFC"
+}
+OTU_dif <- final[which(final$pval.adj<0.05 & abs(final$logFC)>0.5),]
+
+```
+#vector con OTUs que no llegan a familia
+```{r}
+OTU_dif <- OTU_dif[which(!grepl("d);unkn", rownames(OTU_dif))),] # rm dominium
+OTU_dif <- OTU_dif[which(!grepl("p);unkn", rownames(OTU_dif))),]#rm phylum
+OTU_dif <- OTU_dif[which(!grepl("c);unkn", rownames(OTU_dif))),] #rm class 
+OTU_dif <- OTU_dif[which(!grepl("o);unkn", rownames(OTU_dif))),] #rm orden
+#conditions
+condition <- vec
+OTU_lic <- OTU_dif
+```
+#CREATE INDEX_TABLE
+```{r}
+indexes <- c()
+for (i in colnames(pts)){
+
+#First, we create a SRR table where we have w_table and relative_counts per sample
+counts_OTU <- pts[c(rownames(OTU_dif)), i]
+tmp <- OTU_dif
+SRR_table <- cbind(tmp, counts_OTU) #SRR_table contains OTU_dif and the counts per sample
+
+#Here we calculate all the ADIs for each sample
+index <- sum(SRR_table[which(SRR_table$logFC>0),]$counts_OTU)/length(SRR_table[which(SRR_table$logFC>0),]$counts_OTU) - sum(SRR_table[which(SRR_table$logFC<0),]$counts_OTU)/length(SRR_table[which(SRR_table$logFC<0),]$counts_OTU)
+
+indexes <- as.numeric(as.character(c(indexes, index)))
+}
+
+#We create a table with the index and condition per sample
+index_table_counts <- as.data.frame(cbind(indexes, condition))
+rownames(index_table_counts) <- colnames(pts)
+index_table_counts[, "indexes"] <- as.numeric(as.character(index_table_counts[, "indexes"]))
+index_table_counts$indexes <- index_table_counts$indexes*100
+```
+#11.3 PLOT WILCOXON ANALYSIS FOR INDEXES
+```{r}
+tmp <- index_table_counts
+ggboxplot(tmp, x = "condition", y = "indexes",
+                 color = "condition", palette = c("red", "blue"),
+                 add = "jitter", ylab = "ADI") +
+  ggtitle(label = "Comparación de index entre Autistas y Healthy.\nMethod: lic = LIMMA - CLR", subtitle = study) +
+      theme(plot.title = element_text(size = 15, face = "bold")) +
+          font("title", size = 12) +
+          stat_compare_means(method = "wilcox.test", label.x = 1.5, aes(label = ..p.signif..))
+
+```
+#Z-SCORE Index
+```{r}
+#we create a table per condition and we fill it with z_scores
+
+index_healthy <- index_table_counts[which(index_table_counts$condition=="1 Healthy"), "indexes"]
+zscore_healthy_index <- as.numeric(scale(index_healthy))
+names_index_healthy <- rownames(index_table_counts[which(index_table_counts$condition=="1 Healthy"),])
+names(zscore_healthy_index) <- names_index_healthy
+
+index_autism <- index_table_counts[which(index_table_counts$condition== "2 Autism"), "indexes"]
+zscore_autism_index <- c()
+for (ind in index_autism){
+  tmp <- c(index_healthy, ind)
+  zscore_autism_index <- c(zscore_autism_index, scale(tmp)[length(tmp)])
+}
+names_index_autism <- rownames(index_table_counts[which(index_table_counts$condition=="2 Autism"),])
+names(zscore_autism_index) <- names_index_autism
+
+#mismo orden de samples en zscore_index y en index_table
+zscore_index <- c(zscore_healthy_index, zscore_autism_index)
+zscore_index <- zscore_index[rownames(index_table_counts)]
+index_table_counts <- cbind(index_table_counts, zscore_index)
+```
+
+#DISTRIBUTION
+```{r}
+vert_line_df <- data.frame(variable = seq(-4,4, 0.5))
+perc <- sort(index_table_counts[which(index_table_counts$condition=="2 Autism"), "zscore_index"])
+
+percentiles <- c()
+for (div in seq(-4,4, 0.5)){
+  percentiles <- c(percentiles, round(length(which(perc<div))/length(perc)*100, 2))
+}
+label1 <- paste0("P[",percentiles,"]")
+
+ggplot(index_table_counts, aes(x=zscore_index, colour=condition)) +
+  geom_density() +
+  scale_y_continuous(limits = c(0,1.5))+
+  scale_x_continuous(breaks=seq(-4, 4, 0.5)) +
+annotate("text", x = seq(-4,4, 0.5), y = 1.4, label = label1, parse = TRUE, size=4, angle = 90)+
+
+  
+  ggtitle("Distribution of z-score of ADI (Autism Dysbiosis Index)\nMethod: lic = LIMMA - CLR") +
+  geom_vline(data = vert_line_df,aes(xintercept = variable), linetype="dashed", size=0.3, colour = "turquoise3")
+```
+#Venn Diagram
+```{r}
+library(VennDiagram)
+x <- list(rownames(OTU_vli), rownames(OTU_ttc), rownames(OTU_lic))
+g = draw.triple.venn(area1 = length(x[[1]]),
+                 area2 = length(x[[2]]),
+                 area3 = length(x[[3]]),
+                 n12 = length(intersect(x[[1]], x[[2]])),
+                 n13 = length(intersect(x[[1]], x[[3]])),
+                 n23 = length(intersect(x[[2]], x[[3]])),
+                 n123 = length(intersect(intersect(x[[1]], x[[2]]), x[[3]])),
+                  fill = c("pink", "green", "orange"),
+                 category = c("vli", "ttc", "lic"),
+                 cex = rep(2,7),
+                 cat.pos = c(240,300,9),
+                 cat.dist = c(-0.4, 0.004, -0.05),
+      cat.cex = rep(2, 3), ind = FALSE)
+
+grid.arrange(gTree(children=g), top=textGrob("Comparison of the number of differentially\n abundance OTUs selected by different methods", gp=gpar(fontsize=15,font=8)), bottom = textGrob("ttc = t-test - CLR\nlic = LIMMA - CLR\nvli = LIMMA voom", gp=gpar(fontsize=10,font=8)))
+```
+#Table of OTUs
+```{r}
+global <- unique(c(rownames(OTU_vli), rownames(OTU_ttc), rownames(OTU_lic)))
+
+#create a vector indicating if the OTU is high o low in autist patients
+stat <- c()
+
+for (OTU in final[global,"logFC"]){
+  if (OTU > 0){
+    stat <- c(stat, "↑")
+  }
+  else{
+    stat <- c(stat, "↓")
+  }
+}
+
+table <- cbind(global, global%in%rownames(OTU_vli), global%in%rownames(OTU_ttc), global%in%rownames(OTU_lic))
+
+table <- cbind(table, stat)
+
+colnames(table) <- c("OTU", "vli", "ttc", "lic", "In Autist")
+g <- g <- tableGrob(table, rows = NULL)
+g <- gtable_add_grob(g,
+        grobs = rectGrob(gp = gpar(fill = NA, lwd = 2)),
+        t = 1, b = nrow(g), l = 1, r = ncol(g))
+
+find_cell <- function(table, row, col, name="core-fg"){
+  l <- table$layout
+  which(l$t==row & l$l==col & l$name==name)
+}
+
+#adx
+false <- which(global%in%rownames(OTU_vli)==FALSE)
+true <- which(global%in%rownames(OTU_vli)==TRUE)
+
+for (n in false+1){
+  ind2 <- find_cell(g, n, 2, "core-bg")
+  g$grobs[ind2][[1]][["gp"]] <- gpar(fill="firebrick1", col = "firebrick4", lwd=5)
+}
+
+for (n in true+1){
+  ind2 <- find_cell(g, n, 2, "core-bg")
+  g$grobs[ind2][[1]][["gp"]] <- gpar(fill="darkolivegreen1", col = "darkolivegreen4", lwd=5)
+}
+
+
+# adx
+false <- which(global%in%rownames(OTU_ttc)==FALSE)
+true <- which(global%in%rownames(OTU_ttc)==TRUE)
+
+for (n in false+1){
+  ind2 <- find_cell(g, n, 3, "core-bg")
+  g$grobs[ind2][[1]][["gp"]] <- gpar(fill="firebrick1", col = "firebrick4", lwd=5)
+}
+
+for (n in true+1){
+  ind2 <- find_cell(g, n, 3, "core-bg")
+  g$grobs[ind2][[1]][["gp"]] <- gpar(fill="darkolivegreen1", col = "darkolivegreen4", lwd=5)
+}
+
+#lia vs msf
+false <- which(global%in%rownames(OTU_lic)==FALSE)
+true <- which(global%in%rownames(OTU_lic)==TRUE)
+
+for (n in false+1){
+  ind2 <- find_cell(g, n, 4, "core-bg")
+  g$grobs[ind2][[1]][["gp"]] <- gpar(fill="firebrick1", col = "firebrick4", lwd=5)
+}
+
+for (n in true+1){
+  ind2 <- find_cell(g, n, 4, "core-bg")
+  g$grobs[ind2][[1]][["gp"]] <- gpar(fill="darkolivegreen1", col = "darkolivegreen4", lwd=5)
+}
+grid.draw(g)
+```
+
+
+PERMANOVA
+```{r}
+library(vegan) ##Community ecology: ordination, disversity & dissimilarities
+
+metadata <- as(sample_data(physeq1), "data.frame")
+
+adonis(distance(physeq1, method="bray") ~ condition,
+       data = metadata)
+```
+
+```{r}
+library("tidyverse")
+#divide the groups per condition
+autistic <- pts[which(pts_global["host_disease",]=="2 Autism")]
+healthy <- pts[which(pts_global["host_disease",]=="1 Healthy")]
+
+#autist
+new_rownames <- c()
+for (a in 1:length(rownames(healthy))){
+  tmp <- strsplit(rownames(healthy)[a], ";")[[1]][1:2]
+  new_rownames <- c(new_rownames, paste(tmp[1], tmp[2], sep = ";"))
+}
+
+#healthy
+
+#detect the same clade
+
+
+uniques <- c()
+numbers <- c()
+for (a in 1:length(new_rownames)){
+  if (!(new_rownames[a] %in% uniques)==TRUE){
+    numbers <- c(numbers, a)
+    uniques <- c(uniques, new_rownames[a])
+  }
+}
+
+
+
+```
+
+
+
+
+```{r}
+#Manual approach
+
+data_autistic <- c(133.275, 198.6066, 0.02644, 0.4037, 623.2613, 88.45082, 0.02413, 54.06359, 1.39453)
+data_healthy <- c(663.1563, 22.77115, 0.23837, 0.36767, 667.4793, 8.3224, 0.28879, 20.81168, 16.49078)
+data <- as.data.frame(data_autistic)
+data <- cbind(data, data_healthy)
+rownames(data) <- uniques
+
+```
+
+```{r}
+library("RColorBrewer")
+#draw
+count.data <- data.frame(
+  Phylum = uniques,
+  n = data$data_healthy,
+  prop = round((data$data_autistic/sum(data$data_autistic))*100, 1)
+)
+
+
+
+#remove phylum under 0.2
+remove <- c()
+for (a in 1:dim(count.data[1])){
+  if (count.data[a,3]<0.01){
+    remove <- c(remove, a)
+    
+  }
+}
+
+count.data <- count.data[-remove,]
+
+p_h <- c("47.4%", "1.6%", "47.7%", "0.6%", "1.5%", "1.2%")
+clase <- paste0(count.data$Phylum, " (" ,p_h, " vs ", as.character(count.data$prop), "%)")
+count.data$Phylum <- clase
+
+# Add label position
+count.data <- count.data %>%
+  arrange(desc(Phylum)) %>%
+  mutate(lab.ypos = cumsum(prop) - 0.5*prop)
+
+ count.data$lab.ypos[1] <- NA
+# count.data$lab.ypos[2] <- NA
+# count.data$lab.ypos[3] <- NA
+
+count.data
+mycols <- c("#B2182B", "#D6604D", "#F4A582", "#FDDBC7", "#D1E5F0", "#92C5DE", "#4393C3", "#2166AC")
+
+
+ggplot(count.data, aes(x = 2, y = prop, fill = Phylum)) +
+  geom_bar(stat = "identity", color = "white") +
+  coord_polar(theta = "y", start = 0)+
+  geom_text(aes(y = lab.ypos, label = prop), color = "black", size = 6)+
+  scale_fill_manual(values = mycols) +
+  theme_void()+
+  guides(fill=guide_legend(ncol=1)) +
+ 
+  theme(legend.text = element_text(size = 10))+
+   theme(legend.text = element_text(size=20),
+        legend.title = element_text(size=25, face="bold"))+
+  xlim(0.5, 2.5)
+```
+
+```{r}
+#draw
+count.data <- data.frame(
+  Phylum = uniques,
+  n = data$data_healthy,
+  prop = round((data$data_healthy/sum(data$data_healthy))*100, 1)
+)
+
+clase <- paste0(count.data$Phylum, " (" ,as.character(count.data$prop), "%)")
+count.data$Phylum <- clase
+
+#remove phylum under 0.2
+remove <- c()
+for (a in 1:dim(count.data[1])){
+  if (count.data[a,3]<0.2){
+    remove <- c(remove, a)
+    
+  }
+}
+
+count.data <- count.data[-remove,]
+
+
+# Add label position
+count.data <- count.data %>%
+  arrange(desc(Phylum)) %>%
+  mutate(lab.ypos = cumsum(prop) - 0.5*prop)
+
+count.data$lab.ypos[1] <- NA
+count.data$lab.ypos[2] <- NA
+count.data$lab.ypos[3] <- NA
+
+count.data
+mycols <- c("#B2182B", "#D6604D", "#F4A582", "#FDDBC7", "#D1E5F0", "#92C5DE", "#4393C3", "#2166AC")
+
+
+ggplot(count.data, aes(x = 2, y = prop, fill = Phylum)) +
+  geom_bar(stat = "identity", color = "white") +
+  coord_polar(theta = "y", start = 0)+
+  geom_text(aes(y = lab.ypos, label = prop), color = "black", size = 7)+
+  scale_fill_manual(values = mycols) +
+  theme_void()+
+  xlim(0.5, 2.5)
+```
+
+
+
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+
+
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+```{r}
+plot(cars)
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+
+
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
