@@ -1,0 +1,7 @@
+Five datasets were downloading from NCBI SRA, as well as their metadata from SRA RUN Selector. Datasets were downloadinf using the fastq-dump tool avialbale here:
+https://trace.ncbi.nlm.nih.gov/Traces/sra/sra.cgi?view=software (version 2.10.8). The NCBI ID were:
+Study 1 (China): PRJNA578223.
+Study 2 (Italy): PRJEB29421
+Study 3 (India): PRJNA355023
+Study 4 (Russia): PRJNA516054.
+Study 5 (United States): PRJNA282013
